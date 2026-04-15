@@ -13,22 +13,6 @@ from tqdm import tqdm
 
 
 
-# def trans_X(x,y,d,rho,k):
-#     '''
-#     Compute the transition probability P(X_{j+1}=y| X_j=x)
-#     Args:
-#         rho: recombination parameter 
-#         d: physical distance between j and j+1 
-#     Outputs:
-#         probability of P(X_{j+1}=x'| X_j=x)
-#     '''
-#     if x == y:
-#         return np.exp(-rho*d/k)+(1-np.exp(-rho*d/k))(1/k)
-#     else:
-#         return (1-np.exp(-rho*d/k))*(1/k)
-
-
-
 # @jit(nopython=True)
 def logsumexp(a, axis=None, b=None, keepdims=False, return_sign=False):
     """Compute the log of the sum of exponentials of input elements.
@@ -145,28 +129,6 @@ def gammax_log(logtheta, hs,h_origs,k):
     boolean_array = (hs==h_origs) + 1e-10
     intercept = np.ones(k)
     return np.log(intercept) + np.log(0.5) + logtheta - 2*logsumexp(np.array([np.log(k),logtheta]),b=[1]*2)+np.log(boolean_array) + np.log(k) 
-
-# def fill(theta, alphas0, j, M, k):
-#     '''
-#     j: Initial value should be 0
-#     recursively solving alpha_{j+1}
-#     '''
-#     alphas = np.zeros(k)
-#     # for i in range(k):
-#     hs = H[ref_order[:k],j] # H is a k by S matrix with reference haplotypes
-#     h_origs = H[ref_order[:k],j] # Assumption, the joint probability is added sequentially
-#     gamma = gammax(theta, hs,h_origs,k)
-#     # print(gamma)
-#     d = Distlist[j] - Distlist[j-1] # Distlist records the physical distance at each loci
-#     pj = np.exp(-rhos[j-1]*d/k)
-#     if j == M-1: ## j means j+1 in the algorithm A5
-#         alphas = gamma*(pj*alphas0 + (1-pj)*np.sum(alphas0)/k)
-#         return alphas
-#     else:
-#         alphas = gamma*(pj*alphas0 + (1-pj)*np.sum(alphas0)/k)
-#         alphas1 = fill(theta,alphas,j+1, M, k)
-#         return alphas1
-
 
 
 # @jit(nopython=True)
@@ -418,94 +380,6 @@ def init_alpha(ref_order,k, theta, testsnp=-1):
 
 
 
-### python version ### 
-def gammax_p(theta, hs,h_origs,k):
-    '''
-    Compute the P(h_{k+1, j+1}| X_{j+1}=x,h1,..,h_k)
-    Args;
-        h: value of h_{k+1, j}
-        h_orig: value of h given it comes from jth reference
-        theta: error rate need to be estimated
-    '''
-    
-    boolean_array = hs==h_origs
-    intercept = np.ones(k)
-    
-    return intercept*0.5*theta/(k+theta)+boolean_array*k/(k+theta)
-
-
-def fill_norec_long_p(theta, alphas0, M, k,ref_order):
-    '''
-    j: Initial value should be 0
-    recursively solving alpha_{j+1}
-    Add more precision
-    factor: a log based constant
-    '''
-    logalphas0 = np.log(alphas0)
-    logalphas = np.zeros(k)
-    for j in range(M-1):
-        # j means j+1
-        hs = H[ref_order[k],j] # H is a k by S matrix with reference haplotypes; hs is h x j
-        h_origs = H[ref_order[:k],j] 
-        gamma = gammax_p(theta,hs,h_origs,k) # times a constant factor to avoid underflow
-        # pj = np.exp(-(GM[j+1]-GM[j])/k)
-        # log sum of exp(-(GM[j+1]-GM[j])/k + logalphas0) + sum (np.exp(logalphas0))
-        # term0: -gm/k + logalphas0; 1 x k
-        term0=(-(GM[j+1]-GM[j])/k+logalphas0).reshape(-1,1)
-        # term1: (logalpha_i(x') - logk); 1 x k => need to be broadcast
-        term1=(logalphas0-np.log(k)).reshape(1,-1) # k terms, plus sign
-        # add12 = np.logaddexp(term0, term1)
-        # term2: logalpha_i(x') - logk - gm/k; 1 x k => need to be broadcast to k by k
-        term2=(logalphas0-np.log(k)-(GM[j+1]-GM[j])/k).reshape(1,-1) # k terms, minus sign
-        
-        # logsumterms = np.concatenate((term0,term1,term2))
-        logsumterms = np.concatenate((term0.reshape(-1,1), np.repeat(term1.reshape(1,-1),k,axis=0), np.repeat(term2.reshape(1,-1),k,axis=0)),axis=1)
-        logalphas=scipy.special.logsumexp(logsumterms,b=[1]*(k+1)+[-1]*k,axis=1)+np.log(gamma)
-        # print(logalphas)
-        # logalphas = np.log(gamma)+ np.log(pj*alphas0 + (1-pj)*np.sum(alphas0)/k)
-        
-        # addterm = [-(GM[j+1]-GM[j])/k+logalphas0+log(k-1), 
-        # logalphas = np.log(gamma)+np.log(k*pj*np.exp(logalphas0) + (1-pj)*np.sum(np.exp(logalphas0))) - np.log(k) 
-        # if j <= 20:
-        #     print(logalphas)
-        logalphas0 = logalphas
-    return logalphas0
-
-def jointH_long_p(logtheta,S,ref_order,maxperm=20):
-    '''
-    Learn the error parameter theta
-    '''
-    # perm = np.minimum(maxperm,int(np.ceil(0.2*K)))
-    logpi = 0
-
-    for k,_ in enumerate(ref_order):
-        if k >= len(ref_order)-1:
-            break
-        alphas0 = init_alpha_p(ref_order,k+1, np.exp(logtheta))
-        # print('alphas0')
-        # print(alphas0)
-        # alpha_k = fill(theta, alpha0[ref_order[:(k+1)]],0,S,k+1) # k is 0 based, so need to add by 1 
-        logalpha_k = fill_norec_long_p(np.exp(logtheta), alphas0, S, k+1,ref_order) # non recursive call; this function would cause underflow
-        # print(logalpha_k)
-        logpi_k = -np.log10(np.sum(np.exp(logalpha_k))) # -factor*np.log10(np.exp(0.1))
-        logpi+=logpi_k
-    return logpi
-
-def init_alpha_p(ref_order,k, theta):
-    '''
-    This function compute the probability of P(h=k+1, X1=k); 
-    or the joint probability of having k+1 reference haplotype and observing snps in haplotype k in the first locus
-    alpha is a K vector, depending on K
-    P(h=k+1, X1=k) = P(h=k+1| X1=j) * P(X1=j) = gammax(theta, H[ref_order[0],j],h_origs,j)*1/K
-    '''
-    alphas0 = gammax(theta, H[ref_order[k],0],H[ref_order[:k],0],k)*1/k
-    return alphas0
-
-
-#### python end #####
-
-
-
 @jit(nopython=True)
 def forward(j,theta,K, testsnp):
     '''
@@ -650,277 +524,212 @@ def permuteHap(order, seed=0):
     return
 
 
-# def genetic_map(ref, dist, snps):
-#     '''
-#     Args: 
-#         ref: a vector of snps position
-#         dist: a vector of genetic mapping value, 1-1 as ref
-#         snps: a vector of snps of testing
-#     step 1: find the index of snps which has records in ref
-#     step 2: get the corresponding distance of each records
-#     step 3: impute the genetic score for each of the missing records
-#     ''' 
-#     refindices=np.in1d(ref,snps)
-#     testindices=np.in1d(snps,ref)
-
-    
-
-
-
-# Simulation start
-# K = 10
-# S = 10000
-
-# # Distlist = np.loadtxt('example.dist')
-# Distlist = np.arange(S)
-# # rhos = np.loadtxt('example.rho')
-# rhos = np.random.uniform(0.1,0.2,S)
-# # H = np.loadt('example.hap')
-# H = np.random.binomial(1,0.5, (K,S))
-# print(H)
-
-
-# datapath='/home/boyang1995/research/Li-Stephens/PrivateGenomes.jl/data/'
-# mapfile='10k_SNP.map'
-# gene_df = pd.read_csv(f'{datapath}{mapfile}',sep=' ')
-# GM = gene_df.infer_map.values  # genetic mapping
-
-
-# alpha0 = np.random.uniform(0,0.1,K)
-# alpha0 = alpha0/np.sum(alpha0)
-# logtheta = np.log(1/(np.sum(1/np.arange(1,K+1))))
-
-# jointHest = jointH(theta,alpha0,S,K)
-# print(jointHest)
-# alpha_t = fill(theta, alpha0,0,S,K)
-# print(alpha_t)
-# start = time.time()
-# # res = minimize(jointH, logtheta, method='nelder-mead', args=(alpha0,S,K,1))
-# order = np.random.choice(K,K,replace=False)
-# # res = minimize(jointH, logtheta, method='nelder-mead', args=(alpha0,S,K,),tol=1)
-# # res = scipy.optimize.brent(jointH, args=(alpha0,S,K,),tol=1)
-# res = scipy.optimize.minimize_scalar(jointH,args=(alpha0,S,order),tol=1)
-# end = time.time()
-# print(f'execution time is {end-start}')
-# print(res)
-
-# start = time.time()
-# # res = minimize(jointH, logtheta, method='nelder-mead', args=(alpha0,S,K,1))
-# # del ref_order
-# order = np.random.choice(K,K,replace=False)
-# print(f'order is {order}')
-# # res = minimize(jointH, logtheta, method='nelder-mead', args=(alpha0,S,K,),tol=1)
-# # res = scipy.optimize.brent(jointH, args=(alpha0,S,K,),tol=1)
-# res = scipy.optimize.minimize_scalar(jointH_long,args=(S,order),tol=0.1)
-# # res = scipy.optimize.minimize_scalar(jointH,args=(S,order),tol=0.1)
-# end = time.time()
-# print(f'execution time is {end-start}')
-# print(res)
-
-# Simulation end
-
-
-
-####
 # real analysis
 
-
-# infpath='/home/boyang1995/research/Li-Stephens/PrivateGenomes.jl/orig_data/1000GP_Phase3/'
-# infofile='genetic_map_chr15_combined_b37.txt'
-datapath='/home/boyang1995/research/Li-Stephens/PrivateGenomes.jl/data/'
-snpid='805_SNP.legend'
-test='805_SNP_1000G_real.hapt.test'
-train='805_SNP_1000G_real.hapt.train'
-mapfile='805_SNP.map'
-
-H = pd.read_csv(f'{datapath}{train}',sep=' ',header=None).iloc[:,2:].values
-gene_df = pd.read_csv(f'{datapath}{mapfile}',sep=' ')
-GM = gene_df.infer_map.values  # genetic mapping
-
-H_test_df = pd.read_csv(f'{datapath}{test}',sep=' ',header=None)
-H_test = H_test_df.iloc[:,2:].values
-# H_test_lab = H_test.iloc[:,:2].values
-
-K = H.shape[0]
-S = H.shape[1]
-# S = 5000
+def main():
+    global H, GM, Genetic_dist
 
 
-impute_FLAG=False
-test_loglike=True
-theta_learning=False
-theta = np.exp(-1)
-N = H_test.shape[0]
-if impute_FLAG:
-    '''
-    Pearson correlation, mse error, MAF
-    methods: 
-    1. HMM
-    2. majority vote (MSE only)
-    3. random guess 
-    '''
-    print('############# imputation test ############')
+    # infpath='./'
+    # infofile='genetic_map_chr15_combined_b37.txt'
+    datapath='./'
+    snpid='805_SNP.legend'
+    test='805_SNP_1000G_real.hapt.test'
+    train='805_SNP_1000G_real.hapt.train'
+    mapfile='805_SNP.map'
 
-    print(f'K is {K}')
-    print(f'S is {S}')
-    # N = 20
-    rhos_hmm = []
-    # rhos_hard_hmm = []
-    rhos_rg = [] # random guess
-    mses_hmm = []
-    mses_hmm_hard = []
-    # mse_rg = []
-    
-    MAFlist = []
-    mse_MAF = []
-    # j = 40
-    Indices = []
-    for j in range(0, 500):
-        print(f'current snp is {j}')
-    # for j in range(4):
-        Indices.append(j)
-        best_ks = []
-        postlist = []
-        for i in tqdm(range(N)):
-            # -0.06
-            alpha_j = forward(j,theta, K, H_test[i]) # forward(j,theta,K, testsnp)
-            assert np.all(np.isfinite(alpha_j))
-            # print(f'Forward prob: ')
-            # print(alpha_j)
-            beta_j = backward(S, j+1, K, theta, H_test[i]) # backward(M,j,K,theta,testsnp)
-            assert np.all(np.isfinite(beta_j))
-            # print(f'Backward prob: ')
-            # print(beta_j)
-            # logalphabeta = logalpha_i + logbeta_j
-            alphabeta = alpha_j*beta_j
-            # best_k = np.argmax(alphabeta)
-            # best_ks.append(best_k)
-            # P = log_posterior(logalphabeta, j, K, theta)  # log_posterior(logalphabeta, j,  K, theta)
-            P = posterior(alphabeta, j, K,theta)  # posterior(alphabeta, j,  K, theta)
-            if np.isnan(P):
-                print(alpha_j)
-                print(beta_j)
-                print(alphabeta)
-            postlist.append(P)
-        MAF = np.sum(H[:,j])/H.shape[0]
-        # print(f'MAF is {MAF}, {1-MAF}')
-        if MAF > (1-MAF):
-            impute = 1 
-        else:
-            impute = 0
-        MAF = np.amin((MAF,1-MAF))
-        MAFlist.append(MAF)
-        mse_MAF.append(((impute- H_test[:N,j])**2).mean())
-        # print(postlist)
-        hard_imputes = np.round(postlist)
-        postlist = np.array(postlist)
-        # print(postlist)
+    H = pd.read_csv(f'{datapath}{train}',sep=' ',header=None).iloc[:,2:].values
+    gene_df = pd.read_csv(f'{datapath}{mapfile}',sep=' ')
+    GM = gene_df.infer_map.values  # genetic mapping
 
-        rho_P = pearsonr(postlist,H_test[:N,j])[0]
-        rho_sanity = pearsonr(H[np.random.choice(K,N),j],H_test[:N,j])[0]
-        mse_hmm_hard = ((hard_imputes- H_test[:N,j])**2).mean()
-        mse_hmm = ((postlist- H_test[:N,j])**2).mean()
+    H_test_df = pd.read_csv(f'{datapath}{test}',sep=' ',header=None)
+    H_test = H_test_df.iloc[:,2:].values
+    # H_test_lab = H_test.iloc[:,:2].values
 
-        rhos_hmm.append(rho_P)
-        rhos_rg.append(rho_sanity)
-        mses_hmm_hard.append(mse_hmm_hard)
-        mses_hmm.append(mse_hmm)
-
-        print(f'Pearson correlation for index {j} posterior is {rho_P}')
-        print(f'Random pearson correlation is {rho_sanity}')
-    # postlist = np.array(postlist).reshape(-1,1)
-        # MAFlist = np.array(MAFlist).reshape(-1,1)
-        # rhos_hmm = np.array(rhos_hmm).reshape(-1,1)
-        # # rho_sanity = np.array(rho_sanity).reshape(-1,1)
-        # rhos_rg = np.array(rhos_rg).reshape(-1,1)
-        # mses_hmm = np.array(mses_hmm).reshape(-1,1)
-        # mses_hmm_hard = np.array(mses_hmm_hard).reshape(-1,1)
-        # MAFlist = np.array(MAFlist).reshape(-1,1)
-        # Indices = np.array(Indices).reshape(-1,1)
-        # mse_MAF = np.array(mse_MAF).reshape(-1,1)
-        
-        summary = np.concatenate((np.array(Indices).reshape(-1,1), np.array(MAFlist).reshape(-1,1), np.array(rhos_hmm).reshape(-1,1), np.array(rhos_rg).reshape(-1,1),  np.array(mses_hmm).reshape(-1,1), np.array(mses_hmm_hard).reshape(-1,1), np.array(mse_MAF).reshape(-1,1)),axis=1)
-        summary_df = pd.DataFrame(data=summary, columns=['Index', 'MAF', 'r2_hmm', 'r2_rand', 'mse_hmm', 'mse_hmm_hard', 'mse_MAF'])
-        summary_df.to_csv('summary.txt',sep=' ',index=False)
-
-        
-        # best_ks = np.array(best_ks)
-        # rho = pearsonr(H[best_ks,j],H_test[:N,j])[0]
-        
-        # print(f'Pearson correlation for index {j} is {rho}')
-        
-
-       
-        
-
-        
-
-    # np.savetxt('impute.txt',H[best_ks,j])
-    # np.savetxt('actual.txt',H_test[:N,j])
-   
-    
-    # print(f'Imputation error is {np.sum(np.abs(H_test[:,j]-impute))/H_test.shape[0]}')
-
-if test_loglike:
-    loglikes = []
-    indindex = []
-    GM = GM[1:] - GM[:-1]
-    GM = GM[GM>=0]
-    Genetic_dist = np.mean(GM)
-    GM = np.repeat(Genetic_dist, S)
-    
-    # S = 100
-    print('############# test data log likelihood computation ############')
-    print(f'Total tested snps are {S}')
-    print(f'Total samples are {K}')
-    for i in range(H_test.shape[0]):
-    # for i in [255,257,370,371,464,491,773,811,820,822,835]:
-        indindex.append(i)
-        # loglike = jointH_test(theta, S, K, testhap=H_test[i]) # jointH_test(logtheta,S,K,testhap)
-        # print(f'no precision enhance: {loglike}')
-        loglike = jointH_test_log(theta, S, K, testhap=H_test[i]) # jointH_test(logtheta,S,K,testhap)
-        print(f'precision enhance: {loglike}')
-        loglikes.append(loglike)
-        # print(f'neg log lik for ind {i} is {loglike}')
-    loglikes = np.array(loglikes).reshape(-1,1)
-    indindex = np.array(indindex).reshape(-1,1)
-    logsummary = np.concatenate((indindex,loglikes),axis=1)
-    # print(loglikes)
-    np.savetxt('loglike_805.txt',logsummary,fmt='%i %.18e')
-    print('############# test data log likelihood computation done ############')
+    K = H.shape[0]
+    S = H.shape[1]
+    # S = 5000
 
 
-if theta_learning:
+    impute_FLAG=False
+    test_loglike=True
+    theta_learning=False
+    theta = np.exp(-1)
+    N = H_test.shape[0]
+    if impute_FLAG:
+        '''
+        Pearson correlation, mse error, MAF
+        methods: 
+        1. HMM
+        2. majority vote (MSE only)
+        3. random guess 
+        '''
+        print('############# imputation test ############')
 
-    xs = []
-    for i in range(10):
-        Ks = 500
-        order = np.random.choice(K,Ks,replace=False)
-        
-        S = 1000
-        # order = np.arange(K)
-        # order = np.array([1,2,3,4,1])
-        
-        # H = np.random.binomial(1,0.5, (K,S))
-        # alpha0 = np.random.uniform(0,0.1,K)
-        # alpha0 = alpha0/np.sum(alpha0)
-        start = time.time()
-        # logpi = jointH(-1,S,order)
-        # print(logpi)
-        res = scipy.optimize.minimize_scalar(jointH,args=(S,order))
-        xs.append(np.exp(res.x))
-    xs = np.array(xs)
-    print(xs)
-    print(f'mean value is {np.mean(xs)}, std is {np.std(xs)}')
+        print(f'K is {K}')
+        print(f'S is {S}')
+        # N = 20
+        rhos_hmm = []
+        # rhos_hard_hmm = []
+        rhos_rg = [] # random guess
+        mses_hmm = []
+        mses_hmm_hard = []
+        # mse_rg = []
 
-    # res2 = scipy.optimize.minimize_scalar(jointH_long,args=(S,order),bounds=(-50,0),method='bounded')
-    # print(res2)
-    # res3 = scipy.optimize.minimize_scalar(jointH_long_p,args=(S,order),tol=0.1)
-    # print(res3)
-    end = time.time()
-    print(f'execution time is {end-start}')
+        MAFlist = []
+        mse_MAF = []
+        # j = 40
+        Indices = []
+        for j in range(0, 500):
+            print(f'current snp is {j}')
+        # for j in range(4):
+            Indices.append(j)
+            best_ks = []
+            postlist = []
+            for i in tqdm(range(N)):
+                # -0.06
+                alpha_j = forward(j,theta, K, H_test[i]) # forward(j,theta,K, testsnp)
+                assert np.all(np.isfinite(alpha_j))
+                # print(f'Forward prob: ')
+                # print(alpha_j)
+                beta_j = backward(S, j+1, K, theta, H_test[i]) # backward(M,j,K,theta,testsnp)
+                assert np.all(np.isfinite(beta_j))
+                # print(f'Backward prob: ')
+                # print(beta_j)
+                # logalphabeta = logalpha_i + logbeta_j
+                alphabeta = alpha_j*beta_j
+                # best_k = np.argmax(alphabeta)
+                # best_ks.append(best_k)
+                # P = log_posterior(logalphabeta, j, K, theta)  # log_posterior(logalphabeta, j,  K, theta)
+                P = posterior(alphabeta, j, K,theta)  # posterior(alphabeta, j,  K, theta)
+                if np.isnan(P):
+                    print(alpha_j)
+                    print(beta_j)
+                    print(alphabeta)
+                postlist.append(P)
+            MAF = np.sum(H[:,j])/H.shape[0]
+            # print(f'MAF is {MAF}, {1-MAF}')
+            if MAF > (1-MAF):
+                impute = 1 
+            else:
+                impute = 0
+            MAF = np.amin((MAF,1-MAF))
+            MAFlist.append(MAF)
+            mse_MAF.append(((impute- H_test[:N,j])**2).mean())
+            # print(postlist)
+            hard_imputes = np.round(postlist)
+            postlist = np.array(postlist)
+            # print(postlist)
+
+            rho_P = pearsonr(postlist,H_test[:N,j])[0]
+            rho_sanity = pearsonr(H[np.random.choice(K,N),j],H_test[:N,j])[0]
+            mse_hmm_hard = ((hard_imputes- H_test[:N,j])**2).mean()
+            mse_hmm = ((postlist- H_test[:N,j])**2).mean()
+
+            rhos_hmm.append(rho_P)
+            rhos_rg.append(rho_sanity)
+            mses_hmm_hard.append(mse_hmm_hard)
+            mses_hmm.append(mse_hmm)
+
+            print(f'Pearson correlation for index {j} posterior is {rho_P}')
+            print(f'Random pearson correlation is {rho_sanity}')
+        # postlist = np.array(postlist).reshape(-1,1)
+            # MAFlist = np.array(MAFlist).reshape(-1,1)
+            # rhos_hmm = np.array(rhos_hmm).reshape(-1,1)
+            # # rho_sanity = np.array(rho_sanity).reshape(-1,1)
+            # rhos_rg = np.array(rhos_rg).reshape(-1,1)
+            # mses_hmm = np.array(mses_hmm).reshape(-1,1)
+            # mses_hmm_hard = np.array(mses_hmm_hard).reshape(-1,1)
+            # MAFlist = np.array(MAFlist).reshape(-1,1)
+            # Indices = np.array(Indices).reshape(-1,1)
+            # mse_MAF = np.array(mse_MAF).reshape(-1,1)
+
+            summary = np.concatenate((np.array(Indices).reshape(-1,1), np.array(MAFlist).reshape(-1,1), np.array(rhos_hmm).reshape(-1,1), np.array(rhos_rg).reshape(-1,1),  np.array(mses_hmm).reshape(-1,1), np.array(mses_hmm_hard).reshape(-1,1), np.array(mse_MAF).reshape(-1,1)),axis=1)
+            summary_df = pd.DataFrame(data=summary, columns=['Index', 'MAF', 'r2_hmm', 'r2_rand', 'mse_hmm', 'mse_hmm_hard', 'mse_MAF'])
+            summary_df.to_csv('summary.txt',sep=' ',index=False)
+
+
+            # best_ks = np.array(best_ks)
+            # rho = pearsonr(H[best_ks,j],H_test[:N,j])[0]
+
+            # print(f'Pearson correlation for index {j} is {rho}')
 
 
 
 
 
+
+
+        # np.savetxt('impute.txt',H[best_ks,j])
+        # np.savetxt('actual.txt',H_test[:N,j])
+
+
+        # print(f'Imputation error is {np.sum(np.abs(H_test[:,j]-impute))/H_test.shape[0]}')
+
+    if test_loglike:
+        loglikes = []
+        indindex = []
+        GM = GM[1:] - GM[:-1]
+        GM = GM[GM>=0]
+        Genetic_dist = np.mean(GM)
+        GM = np.repeat(Genetic_dist, S)
+
+        # S = 100
+        print('############# test data log likelihood computation ############')
+        print(f'Total tested snps are {S}')
+        print(f'Total samples are {K}')
+        for i in range(H_test.shape[0]):
+        # for i in [255,257,370,371,464,491,773,811,820,822,835]:
+            indindex.append(i)
+            # loglike = jointH_test(theta, S, K, testhap=H_test[i]) # jointH_test(logtheta,S,K,testhap)
+            # print(f'no precision enhance: {loglike}')
+            loglike = jointH_test_log(theta, S, K, testhap=H_test[i]) # jointH_test(logtheta,S,K,testhap)
+            print(f'precision enhance: {loglike}')
+            loglikes.append(loglike)
+            # print(f'neg log lik for ind {i} is {loglike}')
+        loglikes = np.array(loglikes).reshape(-1,1)
+        indindex = np.array(indindex).reshape(-1,1)
+        logsummary = np.concatenate((indindex,loglikes),axis=1)
+        # print(loglikes)
+        np.savetxt('loglike_805.txt',logsummary,fmt='%i %.18e')
+        print('############# test data log likelihood computation done ############')
+
+
+    if theta_learning:
+
+        xs = []
+        for i in range(10):
+            Ks = 500
+            order = np.random.choice(K,Ks,replace=False)
+
+            S = 1000
+            # order = np.arange(K)
+            # order = np.array([1,2,3,4,1])
+
+            # H = np.random.binomial(1,0.5, (K,S))
+            # alpha0 = np.random.uniform(0,0.1,K)
+            # alpha0 = alpha0/np.sum(alpha0)
+            start = time.time()
+            # logpi = jointH(-1,S,order)
+            # print(logpi)
+            res = scipy.optimize.minimize_scalar(jointH,args=(S,order))
+            xs.append(np.exp(res.x))
+        xs = np.array(xs)
+        print(xs)
+        print(f'mean value is {np.mean(xs)}, std is {np.std(xs)}')
+
+        # res2 = scipy.optimize.minimize_scalar(jointH_long,args=(S,order),bounds=(-50,0),method='bounded')
+        # print(res2)
+        # res3 = scipy.optimize.minimize_scalar(jointH_long_p,args=(S,order),tol=0.1)
+        # print(res3)
+        end = time.time()
+        print(f'execution time is {end-start}')
+
+
+
+
+
+
+
+if __name__ == '__main__':
+    main()
